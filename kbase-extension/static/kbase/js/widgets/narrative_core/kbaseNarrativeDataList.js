@@ -8,11 +8,13 @@ define(['jquery',
         'underscore',
         'narrativeConfig',
         'Util/String',
+        'Util/Display',
+        'kbase-client-api',
         'jquery-nearest',
         'kbwidget',
         'kbaseAuthenticatedWidget',
         'kbaseNarrativeDownloadPanel'],
-function ($, _, Config, StringUtil) {
+function ($, _, Config, StringUtil, DisplayUtil) {
     'use strict';
     $.KBWidget({
         name: 'kbaseNarrativeDataList',
@@ -24,6 +26,7 @@ function ($, _, Config, StringUtil) {
             ws_url: Config.url('workspace'),
             landing_page_url: "/functional-site/#/", // !! always include trailing slash
             lp_url: Config.url('landing_pages'),
+            profile_page_url: Config.url('profile_page'),
 
             user_name_fetch_url: "https://kbase.us/services/genome_comparison/users?usernames=",
             loadingImage: Config.get('loading_gif'),
@@ -357,12 +360,13 @@ function ($, _, Config, StringUtil) {
                 self.$currentSelectedRow = null;
                 self.selectedObject = null;
                 self.trigger('removeFilterMethods.Narrative');
-            } else {
-                $selectedRow.addClass('kb-data-list-obj-row-selected');
-                self.$currentSelectedRow = $selectedRow;
-                self.selectedObject = object_info[0];
-                self.trigger('filterMethods.Narrative', 'type:' + object_info[2].split('-')[0].split('.')[1]);
             }
+            // } else {
+            //     $selectedRow.addClass('kb-data-list-obj-row-selected');
+            //     self.$currentSelectedRow = $selectedRow;
+            //     self.selectedObject = object_info[0];
+            //     self.trigger('filterMethods.Narrative', 'type:' + object_info[2].split('-')[0].split('.')[1]);
+            // }
         },
         addDataControls: function (object_info, $alertContainer) {
             var self = this;
@@ -377,6 +381,37 @@ function ($, _, Config, StringUtil) {
              'explore data</a>&nbsp&nbsp|&nbsp&nbsp')
              .append('<a href="'+this.options.landing_page_url+'objgraphview/'+object_info[7] +'/'+object_info[1] +'" target="_blank">'+
              'view provenance</a><br>'))*/
+
+            var $filterMethodInput = $('<span>')
+                .tooltip({
+                    title: 'Show Methods with this as input',
+                    container: '#' + this.mainListId,
+                    delay: {
+                        show: Config.get('tooltip').showDelay,
+                        hide: Config.get('tooltip').hideDelay
+                    }
+                })
+                .addClass(btnClasses)
+                .append($('<span>').addClass('fa fa-sign-in').css(css))
+                .click(function (e) {
+                    this.trigger('filterMethods.Narrative', 'in_type:' + object_info[2].split('-')[0].split('.')[1]);
+                }.bind(this));
+
+            var $filterMethodOutput = $('<span>')
+                .tooltip({
+                    title: 'Show Methods with this as output',
+                    container: '#' + this.mainListId,
+                    delay: {
+                        show: Config.get('tooltip').showDelay,
+                        hide: Config.get('tooltip').hideDelay
+                    }
+                })
+                .addClass(btnClasses)
+                .append($('<span>').addClass('fa fa-sign-out').css(css))
+                .click(function (e) {
+                    this.trigger('filterMethods.Narrative', 'out_type:' + object_info[2].split('-')[0].split('.')[1]);
+                }.bind(this));
+
 
             var $openLandingPage = $('<span>')
                 .tooltip({
@@ -628,6 +663,10 @@ function ($, _, Config, StringUtil) {
                             })));
                 });
 
+            if (!IPython.narrative.readonly) {
+                $btnToolbar.append($filterMethodInput)
+                           .append($filterMethodOutput);
+            }
             $btnToolbar.append($openLandingPage);
             if (!IPython.narrative.readonly)
                 $btnToolbar.append($openHistory);
@@ -709,7 +748,7 @@ function ($, _, Config, StringUtil) {
             }
 
             var $savedByUserSpan = $('<td>').addClass('kb-data-list-username-td');
-            this.displayRealName(object_info[5], $savedByUserSpan);
+            DisplayUtil.displayRealName(object_info[5], $savedByUserSpan);
 
             var $alertDiv = $('<div>').css({'text-align': 'center', 'margin': '10px 0px'});
             var typeLink = '<a href="' + this.options.landing_page_url + 'spec/module/' + type_module + '" target="_blank">' + type_module + "</a>.<wbr>" +
@@ -1452,7 +1491,7 @@ function ($, _, Config, StringUtil) {
         getRichData: function (object_info, $moreRow) {
             var self = this;
             var $usernameTd = $moreRow.find(".kb-data-list-username-td");
-            self.displayRealName(object_info[5], $usernameTd);
+            DisplayUtil.displayRealName(object_info[5], $usernameTd);
         },
         showLoading: function () {
             this.$loadingDiv.show();
@@ -1462,34 +1501,7 @@ function ($, _, Config, StringUtil) {
             this.$loadingDiv.hide();
             this.$mainListDiv.show();
         },
-        displayRealName: function (username, $targetSpan) {
-            var self = this;
-            // todo : use globus to populate user names, but we use a hack because of globus CORS headers
-            if (self.ws) { // make sure we are logged in and have some things
 
-                if (self.real_name_lookup[username]) {
-                    $targetSpan.html(self.real_name_lookup[username] + ' (<a href="' + self.options.landing_page_url + 'people/' + username + '" target="_blank">' + username + "</a>)");
-                } else {
-                    self.real_name_lookup[username] = "..."; // set a temporary value so we don't search again
-                    $targetSpan.html('<a href="' + self.options.landing_page_url + 'people/' + username + '" target="_blank">' + username + "</a>");
-                    $.ajax({
-                        type: "GET",
-                        url: self.options.user_name_fetch_url + username + "&token=" + self._attributes.auth.token,
-                        dataType: "json",
-                        crossDomain: true,
-                        success: function (data, res, jqXHR) {
-                            if (username in data['data'] && data['data'][username]['fullName']) {
-                                self.real_name_lookup[username] = data['data'][username]['fullName'];
-                                $targetSpan.html(self.real_name_lookup[username] + ' (<a href="' + self.options.landing_page_url + 'people/' + username + '" target="_blank">' + username + "</a>)");
-                            }
-                        },
-                        error: function (jqXHR, textStatus, errorThrown) {
-                            //do nothing
-                        }
-                    });
-                }
-            }
-        },
         /**
          * @method loggedInCallback
          * This is associated with the login widget (through the kbaseAuthenticatedWidget parent) and

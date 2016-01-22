@@ -198,8 +198,7 @@ p.clear{
     height: 56px;
 }*/
 
-#header {
-    height: 70px;
+body > #header {
     position:fixed;
     display: block;
     box-sizing: border-box;
@@ -1409,6 +1408,11 @@ div#notebook_panel {
 
 .rendered_html .kb-cell-output ul {
     margin: 0 0 10px 0;
+}
+
+/* override from some jupyter style? */
+.rendered_html :link {
+  text-decoration: none;
 }
 
 .kb-cell-output .nav>li>a {

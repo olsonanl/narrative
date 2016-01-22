@@ -1,10 +1,10 @@
 /**
  * This is the entry point for the Narrative's front-end. It initializes
  * the login session, fires up the data and function widgets, and creates
- * the kbaseNarrativeWorkspace wrapper around the IPython notebook that
+ * the kbaseNarrativeWorkspace wrapper around the Jupyter notebook that
  * does fun things like manage widgets and cells and kernel events to talk to them.
  *
- * To set global variables, use: IPython.narrative.<name> = value
+ * To set global variables, use: Jupyter.narrative.<name> = value
  */
 define([
     'jquery', 
@@ -18,25 +18,28 @@ define([
     'kbaseNarrativePrestart',
     'ipythonCellMenu',
     'base/js/events',
-    'notebook/js/notebook'
-], function($,
-            Config,
-            kbaseNarrativeSidePanel,
-            kbaseNarrativeOutputCell,
-            kbaseNarrativeWorkspace,
-            kbaseNarrativeMethodCell,
-            narrativeLogin,
-            kbaseClient,
-            kbaseNarrativePrestart,
-            kbaseCellToolbar,
-            events,
-            Notebook) {
+    'notebook/js/notebook',
+    'Util/Display'
+], 
+function($,
+         Config,
+         kbaseNarrativeSidePanel,
+         kbaseNarrativeOutputCell,
+         kbaseNarrativeWorkspace,
+         kbaseNarrativeMethodCell,
+         narrativeLogin,
+         kbaseClient,
+         kbaseNarrativePrestart,
+         kbaseCellToolbar,
+         events,
+         Notebook,
+         DisplayUtil) {
     "use strict";
 
     /**
      * @constructor
      * The base, namespaced Narrative object. This is mainly used at start-up time, and
-     * gets injected into the IPython namespace.
+     * gets injected into the Jupyter namespace.
      * 
      * Most of its methods below - init, registerEvents, initAboutDialog, initUpgradeDialog,
      * checkVersion, updateVersion - are set up at startup time.
@@ -56,8 +59,10 @@ define([
         this.selectedCell = null;
         this.currentVersion = Config.get('version');
         this.dataViewers = null;
+        this.profileClient = new UserProfile(Config.url('user_profile'));
+        this.cachedUserIds = {};
 
-        IPython.keyboard_manager.disable();
+        Jupyter.keyboard_manager.disable();
         return this;
     };
 
@@ -65,13 +70,13 @@ define([
 
     };
 
-    // Wrappers for the IPython/Jupyter function so we only maintain it in one place.
+    // Wrappers for the Jupyter/Jupyter function so we only maintain it in one place.
     Narrative.prototype.disableKeyboardManager = function() {
-        IPython.keyboard_manager.disable();
+        Jupyter.keyboard_manager.disable();
     };
 
     Narrative.prototype.enableKeyboardManager = function() {
-        // IPython.keyboard_manager.enable();
+        // Jupyter.keyboard_manager.enable();
     };
 
     /**
@@ -80,52 +85,74 @@ define([
      * code and markdown cells).
      * Updates the currently selected cell to be the one passed in.
      */
-    Narrative.prototype.showIPythonCellToolbar = function(cell) {
-//        if (this.selectedCell && cell !== this.selectedCell) {
-//            this.selectedCell.celltoolbar.hide();
-//        }
-//        this.selectedCell = cell;
-//        // show the new one
-//        if (this.selectedCell && !this.selectedCell.metadata['kb-cell']) {
-//            this.selectedCell.celltoolbar.show();            
-//        }
-        
+    Narrative.prototype.showJupyterCellToolbar = function(cell) {
         // tell the toolbar that it is selected. For now, the toolbar is in 
         // charge.
         $(cell.element).trigger('select.toolbar');
-        
     };
 
     /**
-     * Registers Narrative responses to a few IPython events - mainly some
+     * Registers Narrative responses to a few Jupyter events - mainly some
      * visual effects for managing when the cell toolbar should be shown, 
      * but it also disables the keyboard manager when KBase cells are selected.
      */
     Narrative.prototype.registerEvents = function() {
-        $([IPython.events]).on('status_idle.Kernel',function () {
+        $([Jupyter.events]).on('status_idle.Kernel',function () {
             $("#kb-kernel-icon").removeClass().addClass('fa fa-circle-o');
         });
 
-        $([IPython.events]).on('status_busy.Kernel',function () {
+        $([Jupyter.events]).on('status_busy.Kernel',function () {
             $("#kb-kernel-icon").removeClass().addClass('fa fa-circle');
         });
 
-        $([IPython.events]).on('select.Cell', $.proxy(function(event, data) {
-            this.showIPythonCellToolbar(data.cell);
+        $([Jupyter.events]).on('select.Cell', function(event, data) {
+            this.showJupyterCellToolbar(data.cell);
             if (data.cell.metadata['kb-cell']) {
                 this.disableKeyboardManager();
             }
-        }, this));
+        }.bind(this));
 
-        $([IPython.events]).on('create.Cell', $.proxy(function(event, data) {
-            this.showIPythonCellToolbar(data.cell);
-        }, this));
+        $([Jupyter.events]).on('create.Cell', function(event, data) {
+            this.showJupyterCellToolbar(data.cell);
+        }.bind(this));
 
-        $([IPython.events]).on('delete.Cell', $.proxy(function(event, data) {
-            this.showIPythonCellToolbar(IPython.notebook.get_selected_cell());
+        $([Jupyter.events]).on('delete.Cell', function(event, data) {
+            this.showJupyterCellToolbar(Jupyter.notebook.get_selected_cell());
             this.enableKeyboardManager();
-        }, this));
+        }.bind(this));
+
+        $([Jupyter.events]).on('notebook_save_failed.Notebook', function(event, data) {
+            this.saveFailed(event, data);
+        }.bind(this));
+
     };
+
+    Narrative.prototype.initSharePanel = function() {
+        var $sharePanel = $('<div>');
+        var $shareWidget = $sharePanel.kbaseNarrativeSharePanel({
+            ws_name_or_id: this.getWorkspaceName()
+        });
+        $('#kb-share-btn').popover({
+            html : true,
+            placement : "bottom",
+            content: function() {
+                // we do not allow users to leave thier narratives untitled
+                if (Jupyter && Jupyter.notebook) {
+                    var narrName = Jupyter.notebook.notebook_name;
+                    if (narrName.trim().toLowerCase()==='untitled' || narrName.trim().length === 0) {
+                        Jupyter.save_widget.rename_notebook({notebook: Jupyter.notebook}); //"Your Narrative must be named before you can share it with others.", false);
+                        return "<br><br>Please name your Narrative before sharing.<br><br>"
+                    }
+                    Jupyter.narrative.disableKeyboardManager();
+                }
+
+                //!! arg!! I have to refresh to get reattach the events, which are lost when
+                //the popover is hidden!!!  makes it a little slower because we refetch permissions from ws each time
+                $shareWidget.refresh();
+                return $sharePanel;
+            }
+        });
+    }
 
     /**
      * The "Upgrade your container" dialog should be made available when 
@@ -292,6 +319,68 @@ define([
         $('#notebook').append($versionModal);
     };
 
+    Narrative.prototype.saveFailed = function() {
+        Jupyter.save_widget.set_save_status('Narrative save failed!');
+        console.log(event);
+        console.log(data);
+
+        var errorText;
+        // 413 means that the Narrative is too large to be saved.
+        // currently - 4/6/2015 - there's a hard limit of 4MB per KBase Narrative.
+        // Any larger object will throw a 413 error, and we need to show some text.
+        if (data.xhr.status === 413) {
+            errorText = 'Due to current system constraints, a Narrative may not exceed ' + 
+                        this.maxNarrativeSize + ' of text.<br><br>' +
+                        'Errors of this sort are usually due to excessive size ' + 
+                        'of outputs from Code Cells, or from large objects ' + 
+                        'embedded in Markdown Cells.<br><br>' +
+                        'Please decrease the document size and try to save again.';
+        }
+        else if (data.xhr.responseText) {
+            var $error = $($.parseHTML(data.xhr.responseText));
+            errorText = $error.find('#error-message > h3').text();
+
+            if (errorText) {
+                /* gonna throw in a special case for workspace permissions issues for now.
+                 * if it has this pattern:
+                 * 
+                 * User \w+ may not write to workspace \d+
+                 * change the text to something more sensible.
+                 */
+
+                var res = /User\s+(\w+)\s+may\s+not\s+write\s+to\s+workspace\s+(\d+)/.exec(errorText);
+                if (res) {
+                    errorText = "User " + res[1] + " does not have permission to save to workspace " + res[2] + ".";
+                }
+            }
+        }
+        else {
+            errorText = 'An unknown error occurred!';
+        }
+
+        Jupyter.dialog.modal({
+            title: "Narrative save failed!",
+            body: $('<div>').append(errorText),
+            buttons : {
+                "OK": {
+                    class: "btn-primary",
+                    click: function () {
+                    }
+                }
+            },
+            open : function (event, ui) {
+                var that = $(this);
+                // Upon ENTER, click the OK button.
+                that.find('input[type="text"]').keydown(function (event, ui) {
+                    if (event.which === utils.keycodes.ENTER) {
+                        that.find('.btn-primary').first().click();
+                    }
+                });
+                that.find('input[type="text"]').focus();
+            }
+        });
+    };
+
     // This should not be run until AFTER the notebook has been loaded!
     // It depends on elements of the Notebook metadata.
     Narrative.prototype.init = function() {
@@ -299,141 +388,49 @@ define([
         this.initAboutDialog();
         this.initUpgradeDialog();
 
-        // Override the base IPython event that happens when a notebook fails to save.
-        $([IPython.events]).on('notebook_save_failed.Notebook', $.proxy(function(event, data) {
-            IPython.save_widget.set_save_status('Narrative save failed!');
-            console.log(event);
-            console.log(data);
-
-            var errorText;
-            // 413 means that the Narrative is too large to be saved.
-            // currently - 4/6/2015 - there's a hard limit of 4MB per KBase Narrative.
-            // Any larger object will throw a 413 error, and we need to show some text.
-            if (data.xhr.status === 413) {
-                errorText = 'Due to current system constraints, a Narrative may not exceed ' + 
-                            this.maxNarrativeSize + ' of text.<br><br>' +
-                            'Errors of this sort are usually due to excessive size ' + 
-                            'of outputs from Code Cells, or from large objects ' + 
-                            'embedded in Markdown Cells.<br><br>' +
-                            'Please decrease the document size and try to save again.';
-            }
-            else if (data.xhr.responseText) {
-                var $error = $($.parseHTML(data.xhr.responseText));
-                errorText = $error.find('#error-message > h3').text();
-
-                if (errorText) {
-                    /* gonna throw in a special case for workspace permissions issues for now.
-                     * if it has this pattern:
-                     * 
-                     * User \w+ may not write to workspace \d+
-                     * change the text to something more sensible.
-                     */
-
-                    var res = /User\s+(\w+)\s+may\s+not\s+write\s+to\s+workspace\s+(\d+)/.exec(errorText);
-                    if (res) {
-                        errorText = "User " + res[1] + " does not have permission to save to workspace " + res[2] + ".";
-                    }
-                }
-            }
-            else {
-                errorText = 'An unknown error occurred!';
-            }
-
-            IPython.dialog.modal({
-                title: "Narrative save failed!",
-                body: $('<div>').append(errorText),
-                buttons : {
-                    "OK": {
-                        class: "btn-primary",
-                        click: function () {
-                        }
-                    }
-                },
-                open : function (event, ui) {
-                    var that = $(this);
-                    // Upon ENTER, click the OK button.
-                    that.find('input[type="text"]').keydown(function (event, ui) {
-                        if (event.which === utils.keycodes.ENTER) {
-                            that.find('.btn-primary').first().click();
-                        }
-                    });
-                    that.find('input[type="text"]').focus();
-                }
-            });
-        }, this));
-
-//        $('[data-toggle="tooltip"]').tooltip({
-//            placement: 'auto',
-//            delay: {show: 500, hide: 0}
-//        });
-        
-        /*
-         * Before we get everything loading, just grey out the whole %^! page
-         */
-        var $sidePanel = $('#kb-side-panel').kbaseNarrativeSidePanel({ autorender: false });
+        // var $sidePanel = $('#kb-side-panel').kbaseNarrativeSidePanel({ autorender: false });
 
         // NAR-271 - Firefox needs to be told where the top of the page is. :P
         window.scrollTo(0,0);
         
-        IPython.notebook.set_autosave_interval(0);
-        kbaseCellToolbar.register(IPython.notebook);
-        IPython.CellToolbar.activate_preset("KBase");
-        IPython.CellToolbar.global_show();
+        // Disable autosave so as not to spam the Workspace.
+        Jupyter.notebook.set_autosave_interval(0);
+        kbaseCellToolbar.register(Jupyter.notebook);
+        Jupyter.CellToolbar.activate_preset("KBase");
+        Jupyter.CellToolbar.global_show();
 
-
-        this.ws_name = null;
-
-        if (IPython && IPython.notebook && IPython.notebook.metadata) {
-            // hide all cell toolbars.
-            // well trigger the one to show later.
-
-            $.each(IPython.notebook.get_cells(), function(idx, cell) {
+        if (Jupyter && Jupyter.notebook && Jupyter.notebook.metadata) {
+            $.each(Jupyter.notebook.get_cells(), function(idx, cell) {
                 cell.celltoolbar.hide();
             });
 
-            this.ws_name = IPython.notebook.metadata.ws_name;
-            var narrname = IPython.notebook.get_notebook_name();
-            var username = IPython.notebook.metadata.creator;
-            console.log(IPython.notebook.metadata);
-            // $('#kb-narr-name #name').text(narrname);
-            $('#kb-narr-creator').text(username);
+            var creatorId = Jupyter.notebook.metadata.creator;
+
             $('.kb-narr-namestamp').css({'display':'block'});
 
-            var token = null;
-            if (window.kb && window.kb.token)
-                token = window.kb.token;
-
-            $.ajax({
-                type: 'GET',
-                url: 'https://kbase.us/services/genome_comparison/users?usernames=' + username + '&token=' + token,
-                dataType: 'json',
-                crossDomain: true,
-                success: function(data, res, jqXHR) {
-                    if (data.data && typeof data.data[username] === 'object' && data.data[username].fullName) {
-                        var fullName = data.data[username].fullName;
-                        $('#kb-narr-creator').text(fullName + ' (' + username + ')');
-                    }
-                }
-            });
+            DisplayUtil.displayRealName(creatorId, $('#kb-narr-creator'));
 
             // This puts the cell menu in the right place.
-            $([IPython.events]).trigger('select.Cell', {cell: IPython.notebook.get_selected_cell()});
+            $([Jupyter.events]).trigger('select.Cell', {cell: Jupyter.notebook.get_selected_cell()});
         }
-        if (this.ws_name) {
-            /* It's ON like DONKEY KONG! */
-            $('a#workspace-link').attr('href', $('a#workspace-link').attr('href') + 'objects/' + this.ws_name);
+        if (this.getWorkspaceName() !== null) {
+            this.initSharePanel();
             this.narrController = $('#notebook_panel').kbaseNarrativeWorkspace({
-                loadingImage: "/static/kbase/images/ajax-loader.gif",
-                ws_id: IPython.notebook.metadata.ws_name
+                ws_id: this.getWorkspaceName()
             });
-            $sidePanel.render();
-            $(document).trigger('setWorkspaceName.Narrative', {'wsId' : this.ws_name, 'narrController': this.narrController});
+            $('#kb-side-panel').kbaseNarrativeSidePanel({ autorender: false }).render();
         }
         else {
-            KBFatal("Narrative.init", "Unable to locate workspace name from the Narrative object!");
+            KBFatal('Narrative.init', 'Unable to locate workspace name from the Narrative object!');
         }
     };
 
+    /**
+     * @method
+     * @public
+     * This manually deletes the Docker container that this Narrative runs in, if there is one.
+     * If it can't, or if this is being run locally, it pops up an alert saying so.
+     */
     Narrative.prototype.updateVersion = function() {
         var user = $('#signin-button').kbaseLogin('session', 'user_id');
         var prom = $.ajax({
@@ -453,13 +450,11 @@ define([
     /**
      * @method
      * @public
-     * This triggers a save, but does a few steps first:
-     * ....or, it will soon.
-     * for now, it just passes through to the usual save.
+     * This triggers a save, but saves all cell states first.
      */
     Narrative.prototype.saveNarrative = function() {
         this.narrController.saveAllCellStates();
-        IPython.notebook.save_checkpoint();
+        Jupyter.notebook.save_checkpoint();
     };
 
     /**
@@ -489,15 +484,15 @@ define([
                 // the method initializes an internal method input widget, but rendering and initializing is
                 // async, so we have to wait and check back before we can load the parameter state.
                 // TODO: update kbaseNarrativeMethodCell to return a promise to mark when rendering is complete
-                var newCell = IPython.notebook.get_selected_cell();
-                var newCellIdx = IPython.notebook.get_selected_index();
+                var newCell = Jupyter.notebook.get_selected_cell();
+                var newCellIdx = Jupyter.notebook.get_selected_index();
                 var newWidget = $('#'+$(newCell.get_text())[0].id).kbaseNarrativeMethodCell();
                 var updateStateAndRun = function(state) {
                     if(newWidget.$inputWidget) {
                         // if the $inputWidget is not null, we are good to go, so set the parameters
                         newWidget.loadState(parameters);
                         // make sure the new cell is still selected, then run the method
-                        IPython.notebook.select(newCellIdx);
+                        Jupyter.notebook.select(newCellIdx);
                         newWidget.runMethod();
                     } else {
                         // not ready yet, keep waiting
@@ -510,6 +505,13 @@ define([
         ]);
     };
 
+    Narrative.prototype.getWorkspaceName = function() {
+        return Jupyter.notebook.metadata.ws_name || null;
+    };
+
+    Narrative.prototype.lookupUserProfile = function(username) {
+        return displayUtil.lookupUserProfile(username);
+    };
 
     return Narrative;
 });

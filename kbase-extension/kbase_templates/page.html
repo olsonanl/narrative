@@ -39,7 +39,8 @@
             }
         }
         checkBrowser();
-    </script>    <script>
+    </script>    
+    <script>
         /* Google Analaytics */
         (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
         (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
@@ -58,6 +59,7 @@
           {% endif %}
           baseUrl: '{{static_url("", include_version=False)}}',
           paths: {
+            'auth/js/main': 'auth/js/main.min',
             nbextensions : '{{ base_url }}nbextensions',
             kernelspecs : '{{ base_url }}kernelspecs',
             underscore : 'components/underscore/underscore-min',
@@ -65,10 +67,11 @@
             jquery: 'components/jquery/jquery.min',
             bootstrap: 'components/bootstrap/js/bootstrap.min',
             bootstraptour: 'components/bootstrap-tour/build/js/bootstrap-tour.min',
-            jqueryui: 'components/jquery-ui/ui/minified/jquery-ui.min',
+            'jquery-ui': 'components/jquery-ui/ui/minified/jquery-ui.min',
             moment: 'components/moment/moment',
             codemirror: 'components/codemirror',
             termjs: 'components/term.js/src/term',
+            typeahead: 'components/jquery-typeahead/dist/jquery.typeahead',
           },
           shim: {
             underscore: {
@@ -86,9 +89,9 @@
               deps: ["bootstrap"],
               exports: "Tour"
             },
-            jqueryui: {
-              deps: ["jquery"],
-              exports: "$"
+            'jquery-ui': {
+              deps: ['jquery'],
+              exports: '$'
             }
           }
       });
@@ -96,6 +99,7 @@
       require.config({
           map: {
               '*':{
+                'jqueryui': 'jquery-ui',
                 'contents': '{{ contents_js_source }}',
               }
           }
